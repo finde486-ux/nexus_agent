@@ -1,6 +1,5 @@
 # requirements.txt — NEXUS Agent
-# Core async
-asyncio>=3.11
+# Core async - asyncio is part of stdlib
 aiohttp>=3.9.0
 
 # LLM routing
