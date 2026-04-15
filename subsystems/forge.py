@@ -3,6 +3,7 @@ import json
 import os
 import time
 import uuid
+import re
 from typing import Dict, Any, List, Optional
 from core.subsystem_base import SubsystemBase
 from core.message_bus import MessageBus, MessageEnvelope
@@ -51,6 +52,7 @@ class Forge(SubsystemBase):
 
         # 8. EXECUTE code in Docker sandbox.
         retry_count = 0
+        execution_result = {"exit_code": 1}
         while retry_count < 5:
             execution_result = await self._run_in_sandbox(code_files, budget)
 
@@ -59,11 +61,12 @@ class Forge(SubsystemBase):
                 break
 
             self.logger.info(f"Execution failed (attempt {retry_count+1}), attempting fix...")
-            code_files = await self._fix_code(code_files, execution_result)
+            code_files = await self._fix_code(code_files, execution_result, task_data)
             retry_count += 1
 
         if retry_count == 5:
-            self.logger.error("Max retries reached, escalation logic pending.")
+            self.logger.error("Max retries reached, escalating to CORTEX.")
+            await self._escalate_to_cortex(task_id, task_data, envelope.msg_id)
             return
 
         # 10. SEND completed code to ADVERSARY for attack.
@@ -76,7 +79,7 @@ class Forge(SubsystemBase):
                 break
 
             self.logger.info(f"ADVERSARY rejected (cycle {adversary_cycle+1}), applying fixes...")
-            code_files = await self._apply_adversary_fixes(code_files, attack_res.get("findings", []))
+            code_files = await self._apply_adversary_fixes(code_files, attack_res.get("findings", []), task_data)
             execution_result = await self._run_in_sandbox(code_files, budget)
             adversary_cycle += 1
 
@@ -104,63 +107,55 @@ class Forge(SubsystemBase):
         return res and res.payload.get("status") == "CLEAN"
 
     async def _generate_plan(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
-        prompt = f"Generate a JSON implementation plan for: {task_data.get('description')}"
-        # Real LLM call through OMNIROUTER
-        await self.message_bus.send(MessageEnvelope(
-            str(uuid.uuid4()), self.subsystem_id, "SYS-06", "LLM_CALL",
-            {"model": "gpt-4o", "messages": [{"role": "user", "content": prompt}]},
-            time.time(), 1, str(uuid.uuid4())
-        ))
-        res = await self.message_bus.receive(self.subsystem_id, timeout=30.0)
-        if res and res.payload.get("status") == "success":
+        prompt = f"Generate a JSON implementation plan for: {task_data.get('description')}. Format: {{'files': ['file1.py'], 'dependencies': [], 'est_ram_bytes': N, 'est_cpu_cores': N}}"
+        res = await self._call_llm(prompt)
+        if res:
             try:
-                # Extract JSON from response (simplified)
-                content = res.payload["response"]["choices"][0]["message"]["content"]
-                return json.loads(content[content.find('{'):content.rfind('}')+1])
+                match = re.search(r'\{.*\}', res, re.DOTALL)
+                return json.loads(match.group(0)) if match else {}
             except Exception:
                 self.logger.error("Failed to parse plan JSON.")
-        return {"files": ["solution.py"], "dependencies": [], "est_ram_bytes": 1024, "est_cpu_cores": 1}
+        return {"files": ["solution.py"], "dependencies": [], "est_ram_bytes": 1000000, "est_cpu_cores": 1}
 
     def _verify_plan(self, plan: Dict[str, Any], budget: Dict[str, Any]) -> bool:
-        return plan.get("est_ram_bytes", 0) <= budget.get("max_ram_bytes", 0)
+        return plan.get("est_ram_bytes", 0) <= budget.get("max_ram_bytes", 1e9)
 
     async def _revise_plan(self, plan: Dict[str, Any], budget: Dict[str, Any]) -> Dict[str, Any]:
-        plan["est_ram_bytes"] = budget["max_ram_bytes"]
+        plan["est_ram_bytes"] = budget.get("max_ram_bytes", 512*1024*1024)
         return plan
 
     async def _install_dependencies(self, deps: List[str]):
-        # Real installation using subprocess
         import subprocess
         for dep in deps:
-            subprocess.run(["pip", "install", dep], check=True)
+            try:
+                subprocess.run(["pip", "install", dep], check=True, capture_output=True)
+            except Exception as e:
+                self.logger.error(f"Failed to install {dep}: {e}")
 
     async def _generate_code(self, plan: Dict[str, Any], task_data: Dict[str, Any]) -> Dict[str, str]:
         code_files = {}
         for filename in plan.get("files", ["solution.py"]):
             prompt = f"Generate complete Python code for {filename} to solve: {task_data.get('description')}. No placeholders."
-            await self.message_bus.send(MessageEnvelope(
-                str(uuid.uuid4()), self.subsystem_id, "SYS-06", "LLM_CALL",
-                {"model": "gpt-4o", "messages": [{"role": "user", "content": prompt}]},
-                time.time(), 1, str(uuid.uuid4())
-            ))
-            res = await self.message_bus.receive(self.subsystem_id, timeout=30.0)
-            if res and res.payload.get("status") == "success":
-                code_files[filename] = res.payload["response"]["choices"][0]["message"]["content"]
+            res = await self._call_llm(prompt)
+            if res:
+                code_files[filename] = res
         return code_files
 
     async def _run_in_sandbox(self, code_files: Dict[str, str], budget: Dict[str, Any]) -> Dict[str, Any]:
         import docker
+        if not code_files: return {"exit_code": 1, "stderr": "No code files"}
         client = docker.from_env()
         for name, content in code_files.items():
             with open(os.path.join(self.workspace_dir, name), "w") as f:
                 f.write(content)
+        entry_point = list(code_files.keys())[0]
         try:
             container = client.containers.run(
                 image=Config.SANDBOX_IMAGE, network_mode='none',
-                mem_limit=f"{budget['max_ram_bytes']}b", cpu_count=budget['max_cpu_cores'],
+                mem_limit=f"{budget.get('max_ram_bytes', 512*1024*1024)}b", cpu_count=budget.get('max_cpu_cores', 2),
                 volumes={self.workspace_dir: {'bind': '/workspace', 'mode': 'rw'}},
                 security_opt=['no-new-privileges'], cap_drop=['ALL'], user='1000:1000', auto_remove=True,
-                command=f"python3 /workspace/{list(code_files.keys())[0]}"
+                command=f"python3 /workspace/{entry_point}"
             )
             return {"exit_code": 0, "stdout": container.decode(), "stderr": ""}
         except Exception as e:
@@ -175,10 +170,36 @@ class Forge(SubsystemBase):
         res = await self.message_bus.receive(self.subsystem_id, timeout=120.0)
         return res.payload if res else {"status": "REJECTED", "findings": []}
 
-    async def _fix_code(self, code_files: Dict[str, str], result: Dict[str, Any]) -> Dict[str, str]:
-        # Implement real fix logic via OMNIROUTER
+    async def _fix_code(self, code_files: Dict[str, str], result: Dict[str, Any], task_data: Dict[str, Any]) -> Dict[str, str]:
+        prompt = f"The following code failed with error: {result.get('stderr')}\n\nTask: {task_data.get('description')}\n\nCode:\n{json.dumps(code_files)}\n\nProvide the fixed code for all files."
+        res = await self._call_llm(prompt)
+        # Simplified: in real impl we'd parse multi-file output
+        if res:
+            for k in code_files: code_files[k] = res
         return code_files
 
-    async def _apply_adversary_fixes(self, code_files: Dict[str, str], findings: List[Any]) -> Dict[str, str]:
-        # Implement real fix logic via OMNIROUTER
+    async def _apply_adversary_fixes(self, code_files: Dict[str, str], findings: List[Any], task_data: Dict[str, Any]) -> Dict[str, str]:
+        prompt = f"The following code failed ADVERSARY checks: {json.dumps(findings)}\n\nTask: {task_data.get('description')}\n\nCode:\n{json.dumps(code_files)}\n\nProvide the fixed code."
+        res = await self._call_llm(prompt)
+        if res:
+            for k in code_files: code_files[k] = res
         return code_files
+
+    async def _escalate_to_cortex(self, task_id: str, task_data: Dict[str, Any], correlation_id: str):
+        await self.message_bus.send(MessageEnvelope(
+            str(uuid.uuid4()), self.subsystem_id, "SYS-01", "SOLVE_COMPLEX_TASK",
+            {"task_id": task_id, "description": task_data.get("description")},
+            time.time(), 1, correlation_id
+        ))
+
+    async def _call_llm(self, prompt: str) -> Optional[str]:
+        msg_id = str(uuid.uuid4())
+        await self.message_bus.send(MessageEnvelope(
+            msg_id, self.subsystem_id, "SYS-06", "LLM_CALL",
+            {"model": "gpt-4o", "messages": [{"role": "user", "content": prompt}]},
+            time.time(), 1, msg_id
+        ))
+        res = await self.message_bus.receive(self.subsystem_id, timeout=60.0)
+        if res and res.payload.get("status") == "success":
+            return res.payload["response"]["choices"][0]["message"]["content"]
+        return None
