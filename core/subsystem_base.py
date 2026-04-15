@@ -13,11 +13,11 @@ class SubsystemBase(ABC):
 
     @abstractmethod
     async def initialize(self):
-        pass
+        self.logger.info(f"Initializing subsystem {self.subsystem_id}")
 
     @abstractmethod
     async def process_message(self, envelope: MessageEnvelope):
-        pass
+        self.logger.info(f"Processing message {envelope.msg_id} in {self.subsystem_id}")
 
     async def run(self):
         self.is_running = True

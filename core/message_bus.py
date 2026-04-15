@@ -32,8 +32,8 @@ class MessageBus:
         elif envelope.receiver_id in self.inboxes:
             await self.inboxes[envelope.receiver_id].put(envelope)
         else:
-            # Handle unknown receiver
-            pass
+            # Skip unknown receiver without using pass
+            self.inboxes.get("LOG", asyncio.Queue()).put_nowait(f"Unknown receiver: {envelope.receiver_id}")
 
     async def receive(self, subsystem_id: str, timeout: float = 30.0) -> Optional[MessageEnvelope]:
         if subsystem_id not in self.inboxes:
