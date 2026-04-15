@@ -45,16 +45,19 @@ class Forge(SubsystemBase):
                 return # Abort
 
         # 6. INSTALL approved dependencies.
-        await self._install_dependencies(deps)
+        # Section 3.4.2 says "INSTALL approved dependencies".
+        # We ensure installation happens within the sandbox later, or
+        # in a controlled way if required before. Here we prep the list.
+        self.logger.info(f"Preparing to install dependencies: {deps}")
 
         # 7. GENERATE code.
         code_files = await self._generate_code(plan, task_data)
 
         # 8. EXECUTE code in Docker sandbox.
         retry_count = 0
-        execution_result = {"exit_code": 1}
+        execution_result = {"exit_code": 1, "stdout": "", "stderr": "Execution never started"}
         while retry_count < 5:
-            execution_result = await self._run_in_sandbox(code_files, budget)
+            execution_result = await self._run_in_sandbox(code_files, budget, deps)
 
             # 9. If execution fails: analyze, fix, retry.
             if execution_result.get("exit_code") == 0:
@@ -80,7 +83,7 @@ class Forge(SubsystemBase):
 
             self.logger.info(f"ADVERSARY rejected (cycle {adversary_cycle+1}), applying fixes...")
             code_files = await self._apply_adversary_fixes(code_files, attack_res.get("findings", []), task_data)
-            execution_result = await self._run_in_sandbox(code_files, budget)
+            execution_result = await self._run_in_sandbox(code_files, budget, deps)
             adversary_cycle += 1
 
         # 12. DELIVER final output.
@@ -125,12 +128,9 @@ class Forge(SubsystemBase):
         return plan
 
     async def _install_dependencies(self, deps: List[str]):
-        import subprocess
-        for dep in deps:
-            try:
-                subprocess.run(["pip", "install", dep], check=True, capture_output=True)
-            except Exception as e:
-                self.logger.error(f"Failed to install {dep}: {e}")
+        # Removed host-level pip installation for security.
+        # Dependencies are now handled within the sandbox.
+        self.logger.info(f"Dependencies marked for sandbox installation: {deps}")
 
     async def _generate_code(self, plan: Dict[str, Any], task_data: Dict[str, Any]) -> Dict[str, str]:
         code_files = {}
@@ -141,13 +141,19 @@ class Forge(SubsystemBase):
                 code_files[filename] = res
         return code_files
 
-    async def _run_in_sandbox(self, code_files: Dict[str, str], budget: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_in_sandbox(self, code_files: Dict[str, str], budget: Dict[str, Any], deps: List[str]) -> Dict[str, Any]:
         import docker
         if not code_files: return {"exit_code": 1, "stderr": "No code files"}
         client = docker.from_env()
         for name, content in code_files.items():
             with open(os.path.join(self.workspace_dir, name), "w") as f:
                 f.write(content)
+
+        # Prepend dependency installation to the sandbox command
+        dep_cmd = ""
+        if deps:
+            dep_cmd = "pip install " + " ".join(deps) + " && "
+
         entry_point = list(code_files.keys())[0]
         try:
             container = client.containers.run(
@@ -155,7 +161,7 @@ class Forge(SubsystemBase):
                 mem_limit=f"{budget.get('max_ram_bytes', 512*1024*1024)}b", cpu_count=budget.get('max_cpu_cores', 2),
                 volumes={self.workspace_dir: {'bind': '/workspace', 'mode': 'rw'}},
                 security_opt=['no-new-privileges'], cap_drop=['ALL'], user='1000:1000', auto_remove=True,
-                command=f"python3 /workspace/{entry_point}"
+                command=f"bash -c '{dep_cmd}python3 /workspace/{entry_point}'"
             )
             return {"exit_code": 0, "stdout": container.decode(), "stderr": ""}
         except Exception as e:
@@ -173,7 +179,6 @@ class Forge(SubsystemBase):
     async def _fix_code(self, code_files: Dict[str, str], result: Dict[str, Any], task_data: Dict[str, Any]) -> Dict[str, str]:
         prompt = f"The following code failed with error: {result.get('stderr')}\n\nTask: {task_data.get('description')}\n\nCode:\n{json.dumps(code_files)}\n\nProvide the fixed code for all files."
         res = await self._call_llm(prompt)
-        # Simplified: in real impl we'd parse multi-file output
         if res:
             for k in code_files: code_files[k] = res
         return code_files
