@@ -1,0 +1,811 @@
+NEXUS
+Next-Generation Autonomous Engineering Intelligence
+
+
+COMPLETE SYSTEM DESIGN DOCUMENT
+Architecture  |  Subsystem Specifications  |  Implementation Blueprint
+
+Version 1.0  |  2025
+Classification: CONFIDENTIAL — INTERNAL USE ONLY
+
+1. EXECUTIVE SUMMARY
+
+NEXUS is a fully autonomous, self-evolving, locally-executing software engineering intelligence agent. Unlike Jules (Google), GitHub Copilot Agents, or Claude Code, NEXUS is not merely a code-completion sidekick or a task executor. NEXUS is designed to function as a complete engineering team — spanning architecture, implementation, testing, security, performance engineering, and continuous self-improvement — running entirely on commodity hardware (4 GB RAM minimum for the agent itself) with zero data leaving the user&apos;s machine.
+
+This document is the authoritative, exhaustive technical specification for NEXUS. Every subsystem, every data flow, every interface, and every implementation rule is described with sufficient precision that a model with limited reasoning capability (such as Gemini Flash) can implement the system without ambiguity, guesswork, or omissions.
+
+CRITICAL IMPLEMENTATION RULE: Every section of this document must be implemented exactly as described. No subsystem may be skipped, simplified, or deferred. If a section specifies a data structure, that exact structure must be used. If a section specifies a sequence of steps, those steps must be executed in that exact order. Deviation is a defect.
+
+1.1 Core Design Principles
+NEXUS is built on seven non-negotiable principles:
+Local-first: All agent logic, memory, and execution run on the user&apos;s machine. No telemetry. No cloud dependency for core operation.
+Privacy-absolute: No user code, prompts, or outputs are ever transmitted to any third party without explicit user consent.
+Hardware-aware: Every decision the agent makes is informed by real-time hardware metrics. The agent never designs a solution that exceeds available resources.
+Adversarial by default: Every piece of code produced by NEXUS is attacked, broken, and stress-tested before delivery.
+Memory-persistent: NEXUS remembers everything across sessions — every file, every decision, every bug, every fix — using a local knowledge graph.
+Self-evolving: NEXUS improves its own reasoning patterns, prompt strategies, and code generation heuristics through biological mutation loops.
+Zero-trust security: Every external artifact (dependency, API response, generated code) is treated as hostile until verified.
+
+2. SYSTEM ARCHITECTURE
+
+NEXUS is composed of twelve tightly integrated subsystems. Each subsystem has a single, well-defined responsibility. Subsystems communicate exclusively through a typed internal message bus. No subsystem may call another subsystem directly — all communication is asynchronous and message-driven.
+
+2.1 Subsystem Inventory
+
+Subsystem ID
+Name
+Primary Responsibility
+SYS-01
+CORTEX
+Multi-agent debate-driven reasoning engine
+SYS-02
+MEMORY-GRAPH
+Persistent knowledge graph with Code DNA indexing
+SYS-03
+NERVE
+Real-time hardware telemetry and resource budgeting
+SYS-04
+FORGE
+Autonomous multi-file code generation and build execution
+SYS-05
+ADVERSARY
+Automated code attack, fuzzing, and QA team simulation
+SYS-06
+OMNIROUTER
+Universal LLM provider routing and token optimization
+SYS-07
+SENTINEL
+Security scanning, sandboxing, and dependency verification
+SYS-08
+PHANTOM
+Passive background codebase monitoring and shadow mode
+SYS-09
+EVOLVER
+Biological mutation engine for code evolution
+SYS-10
+COGLOAD
+Cognitive load balancer for intelligent LLM routing
+SYS-11
+TIMETRAVEL
+Full execution history reconstruction and root-cause debugging
+SYS-12
+IMMUNE
+Architecture immune system and codebase health monitoring
+
+2.2 Internal Message Bus
+All inter-subsystem communication uses a typed message envelope. The message bus is implemented as an in-process async queue (Python asyncio.Queue). There is one queue per subsystem (inbox). Each message has the following mandatory fields:
+
+# message_bus.py — MessageEnvelope (mandatory fields)
+@dataclass
+class MessageEnvelope:
+    msg_id:      str        # UUID v4, unique per message
+    sender_id:   str        # subsystem ID (e.g. &apos;SYS-01&apos;)
+    receiver_id: str        # subsystem ID or &apos;BROADCAST&apos;
+    msg_type:    str        # e.g. &apos;TASK_REQUEST&apos;, &apos;RESULT&apos;, &apos;ERROR&apos;
+    payload:     dict       # arbitrary typed data
+    timestamp:   float      # unix epoch, from time.monotonic()
+    priority:    int        # 1 (highest) to 5 (lowest)
+    correlation_id: str     # links request/response pairs (same UUID)
+
+RULE: No subsystem may block waiting for a response. All calls are fire-and-forget with response correlation. Timeouts must be set on all send operations (default: 30 seconds). If a subsystem fails to respond within the timeout, the caller logs the failure and proceeds with a graceful degradation path.
+
+3. SUBSYSTEM SPECIFICATIONS
+
+3.1 SYS-01: CORTEX — Multi-Agent Reasoning Engine
+
+CORTEX is the central reasoning engine of NEXUS. It never solves a hard problem with a single LLM call. Instead, it uses a structured debate protocol that forces multiple independent reasoning paths to compete, challenge each other, and converge on the highest-quality solution.
+
+3.1.1 Debate Protocol (Mandatory for all tasks classified as COMPLEX)
+The following sequence must be executed exactly in this order for every COMPLEX-class task:
+Spawn exactly THREE independent Solver Agents. Each receives the same task description but a DIFFERENT system prompt emphasizing a different mental model: (a) Pragmatic — optimize for simplicity and runtime speed. (b) Defensive — optimize for correctness, edge-case coverage, and security. (c) Innovative — optimize for novel approaches that deviate from conventional solutions.
+Each Solver Agent produces a complete solution independently. No Solver Agent sees another&apos;s output at this stage.
+Spawn a single Critic Agent. The Critic receives all three solutions. The Critic&apos;s job is to identify the WEAKEST point in each solution, not to rank them.
+Each Solver Agent receives the Critic&apos;s analysis of its own solution and produces a revised solution.
+Spawn a single Judge Agent. The Judge receives all three revised solutions AND the original Critic analysis. The Judge scores each solution on four criteria: Correctness (0-10), Performance (0-10), Security (0-10), Maintainability (0-10). The Judge must provide a written justification for every score.
+The solution with the highest total score is selected. In case of a tie, the Defensive solution wins.
+The full debate transcript (all agent outputs, scores, justifications) is stored in MEMORY-GRAPH under the task ID.
+
+IMPLEMENTATION RULE: Task classification (SIMPLE / MEDIUM / COMPLEX) is determined by COGLOAD (SYS-10) before any task reaches CORTEX. CORTEX must not classify tasks itself. If COGLOAD is unavailable, all tasks default to COMPLEX.
+
+3.1.2 CORTEX Data Structures
+# cortex.py
+@dataclass
+class SolverAgent:
+    agent_id:     str          # &apos;PRAGMATIC&apos; | &apos;DEFENSIVE&apos; | &apos;INNOVATIVE&apos;
+    system_prompt: str
+    solution:     str          # raw output from LLM
+    revised_solution: str      # output after Critic feedback
+
+@dataclass
+class DebateSession:
+    task_id:      str
+    task_desc:    str
+    solvers:      List[SolverAgent]
+    critic_output: str
+    judge_scores: Dict[str, Dict[str, int]]  # agent_id -> criterion -> score
+    judge_justifications: Dict[str, str]
+    winner_id:    str
+    final_solution: str
+    duration_ms:  int
+
+3.2 SYS-02: MEMORY-GRAPH — Persistent Knowledge Graph
+
+MEMORY-GRAPH is the long-term memory of NEXUS. It persists across all sessions, stores every significant event, and provides semantic search over the entire project history. It runs locally using SQLite (structured data) and ChromaDB (vector embeddings).
+
+3.2.1 Storage Architecture
+Two storage backends operate in parallel:
+SQLite database (nexus_memory.db): Stores structured records — tasks, decisions, bugs, files, dependencies, agent outputs. Schema is fixed (see Section 3.2.2).
+ChromaDB collection (nexus_vectors): Stores vector embeddings of every file, function, commit message, and task description. Enables semantic similarity search.
+
+3.2.2 SQLite Schema (Complete — must not be modified)
+-- memory_schema.sql
+CREATE TABLE files (
+  file_id     TEXT PRIMARY KEY,  -- SHA-256 of absolute path
+  abs_path    TEXT NOT NULL,
+  language    TEXT,
+  dna_hash    TEXT,              -- semantic fingerprint (see 3.2.3)
+  last_modified REAL,            -- unix timestamp
+  size_bytes  INTEGER
+);
+
+CREATE TABLE functions (
+  func_id     TEXT PRIMARY KEY,  -- SHA-256 of file_id + func_name + line_no
+  file_id     TEXT REFERENCES files(file_id),
+  func_name   TEXT NOT NULL,
+  line_start  INTEGER,
+  line_end    INTEGER,
+  dna_hash    TEXT,
+  complexity  INTEGER            -- cyclomatic complexity
+);
+
+CREATE TABLE decisions (
+  decision_id TEXT PRIMARY KEY,
+  task_id     TEXT,
+  timestamp   REAL,
+  description TEXT,              -- why this decision was made
+  rationale   TEXT,
+  files_affected TEXT            -- JSON array of file_ids
+);
+
+CREATE TABLE bugs (
+  bug_id      TEXT PRIMARY KEY,
+  task_id     TEXT,
+  file_id     TEXT REFERENCES files(file_id),
+  line_no     INTEGER,
+  error_type  TEXT,
+  description TEXT,
+  root_cause  TEXT,
+  fix_applied TEXT,
+  test_added  TEXT,              -- test code that would have caught it
+  timestamp   REAL
+);
+
+CREATE TABLE dependencies (
+  dep_id      TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  version     TEXT,
+  ecosystem   TEXT,              -- &apos;pip&apos; | &apos;npm&apos; | &apos;cargo&apos; | etc.
+  scan_status TEXT,              -- &apos;CLEAN&apos; | &apos;QUARANTINED&apos; | &apos;PENDING&apos;
+  scan_report TEXT,
+  install_ts  REAL
+);
+
+3.2.3 Code DNA
+Every file and function is assigned a DNA hash — a semantic fingerprint that captures the logical behavior of the code, not just its text content. Two functions that do the same thing with different variable names will have identical DNA hashes.
+DNA hash computation algorithm (mandatory):
+Extract the AST of the function.
+Normalize the AST: rename all local variables to canonical names (var_0, var_1, ...), remove comments, strip whitespace.
+Serialize the normalized AST to a canonical JSON string.
+Compute SHA-256 of the canonical JSON string.
+Store as dna_hash in the functions table.
+When any file is modified, NEXUS must recompute DNA hashes for all affected functions, compare with stored hashes, and identify all OTHER functions in the codebase whose DNA hash has a Jaccard similarity > 0.7 with any changed function. Those functions are flagged for review and reported to the user.
+
+3.3 SYS-03: NERVE — Hardware Telemetry System
+
+NERVE is the hardware intelligence layer of NEXUS. It monitors all hardware resources in real time and injects resource constraints into every task before the task is sent to FORGE or CORTEX. No code is designed without NERVE&apos;s approval.
+
+3.3.1 Monitored Metrics (sampled every 500ms)
+
+Metric
+Source
+Action Threshold
+CPU usage per core (%)
+psutil.cpu_percent(percpu=True)
+Throttle task if any core > 85%
+RAM available (bytes)
+psutil.virtual_memory().available
+Refuse task if available < 512 MB
+GPU VRAM free (bytes)
+nvidia-ml-py / metal-py
+Skip GPU path if VRAM < 256 MB
+Disk I/O (bytes/sec)
+psutil.disk_io_counters()
+Warn if write > 100 MB/s
+Network (bytes/sec)
+psutil.net_io_counters()
+Alert if unexpected egress > 0
+Process memory (bytes)
+psutil.Process().memory_info()
+Kill sandbox if > 2 GB
+CPU temperature (C)
+psutil.sensors_temperatures()
+Pause all tasks if > 90C
+
+3.3.2 Resource Budget Contract
+Every task submitted to NEXUS may include an optional ResourceBudget. If no budget is specified, NERVE computes a safe default based on current available resources (50% of available RAM, 60% of CPU headroom).
+# nerve.py
+@dataclass
+class ResourceBudget:
+    max_ram_bytes:    int   # hard ceiling — solution must fit within this
+    max_cpu_cores:    int   # maximum parallel threads
+    max_exec_ms:      int   # maximum allowed runtime in milliseconds
+    max_disk_bytes:   int   # maximum disk writes
+    gpu_allowed:      bool  # whether GPU execution is permitted
+
+# NERVE attaches a ResourceBudget to every task envelope before dispatch.
+# FORGE must design solutions that fit within the budget.
+# ADVERSARY must verify the solution respects the budget under load.
+# If a solution violates the budget, it is REJECTED and FORGE retries.
+
+3.4 SYS-04: FORGE — Autonomous Code Generation and Build Engine
+
+FORGE is the primary code generation and execution engine. It takes tasks from CORTEX or direct user input, designs solutions respecting NERVE&apos;s resource budgets, executes all code in isolated Docker sandboxes, and produces deliverables ready for ADVERSARY&apos;s review.
+
+3.4.1 Input Modalities (all must be supported)
+GitHub Issue URL: FORGE fetches the issue, extracts requirements, generates a fix or feature, and creates a pull request draft.
+Natural language text: Free-form description of what to build, fix, or investigate.
+Screenshot / image (via vision LLM): Diagram, whiteboard photo, or UI mockup — FORGE converts to implementation plan then code.
+Voice transcript: Transcribed voice note treated as natural language input.
+Existing file path: FORGE reads, analyzes, and modifies the file.
+
+3.4.2 FORGE Execution Pipeline (exact sequence, no steps may be skipped)
+RECEIVE task from message bus. Validate task envelope (all mandatory fields present).
+REQUEST resource budget from NERVE. Wait for response (max 5 seconds). If NERVE is unavailable, use conservative defaults: 512 MB RAM, 2 CPU cores, 60 seconds.
+PLAN: Generate a step-by-step implementation plan in structured JSON. The plan must include: (a) list of files to create or modify, (b) list of dependencies to install, (c) estimated RAM and CPU usage, (d) test cases to write.
+VERIFY PLAN against ResourceBudget from NERVE. If estimated usage exceeds budget, revise plan before proceeding.
+SEND dependency list to SENTINEL for scanning. WAIT for SENTINEL approval (max 60 seconds). DO NOT proceed if any dependency is flagged as QUARANTINED.
+INSTALL approved dependencies using the appropriate package manager. Log every install with version and checksum.
+GENERATE code. Each file must be written completely — no placeholders, no TODO comments, no stub functions.
+EXECUTE code in Docker sandbox (see 3.4.3). Capture stdout, stderr, exit code, and resource usage.
+If execution fails: analyze error, apply fix, return to step 8. Maximum 5 retry attempts. On 5th failure, escalate to CORTEX debate.
+SEND completed code to ADVERSARY for attack. WAIT for ADVERSARY clearance.
+If ADVERSARY rejects: apply all specified fixes, return to step 8. Maximum 3 ADVERSARY cycles.
+DELIVER final output to user with full execution report.
+
+3.4.3 Docker Sandbox Specification
+ALL code execution must occur inside a Docker container with the following exact configuration. FORGE must create this container before any code runs and destroy it immediately after:
+# forge_sandbox.py — Docker container configuration (mandatory)
+SANDBOX_CONFIG = {
+    &apos;image&apos;:       &apos;nexus-sandbox:latest&apos;,   # pre-built minimal image
+    &apos;network_mode&apos;:&apos;none&apos;,                   # NO network access
+    &apos;mem_limit&apos;:   &apos;{budget.max_ram_bytes}b&apos;,
+    &apos;cpu_count&apos;:   budget.max_cpu_cores,
+    &apos;read_only&apos;:   False,                    # needs write for execution
+    &apos;volumes&apos;: {
+        &apos;/tmp/nexus_workspace&apos;: {&apos;bind&apos;: &apos;/workspace&apos;, &apos;mode&apos;: &apos;rw&apos;}
+    },
+    &apos;security_opt&apos;: [&apos;no-new-privileges&apos;],
+    &apos;cap_drop&apos;:    [&apos;ALL&apos;],
+    &apos;user&apos;:        &apos;1000:1000&apos;,              # non-root
+    &apos;auto_remove&apos;: True
+}
+
+CRITICAL SECURITY RULE: The sandbox network_mode must always be &apos;none&apos;. The agent must never execute user code with network access enabled. Any attempt by generated code to open a network socket must be detected by SENTINEL and reported as a CRITICAL security violation.
+
+3.5 SYS-05: ADVERSARY — Automated QA and Attack Engine
+
+ADVERSARY is NEXUS&apos;s built-in adversarial testing team. Its sole purpose is to find every way that FORGE&apos;s output can fail, be exploited, or behave incorrectly. ADVERSARY is never satisfied with code that merely works on the happy path.
+
+3.5.1 Attack Modules (all must run for every code submission)
+
+Module
+What It Does
+Pass Criterion
+Unit Test Runner
+Runs all generated unit tests, measures coverage
+100% of written tests pass, coverage >= 80%
+Fuzzer
+Sends 10,000 random/malformed inputs to every public function
+No crashes, no unhandled exceptions
+Load Tester
+Runs 1000 concurrent requests or iterations for 30 seconds
+No memory leak, performance degrades < 20% under load
+Security Scanner
+Runs Bandit + custom AST checks for OWASP Top 10
+Zero HIGH or CRITICAL severity findings
+Resource Verifier
+Measures actual RAM, CPU, and disk usage during execution
+Actual usage <= ResourceBudget limits
+
+3.6 SYS-06: OMNIROUTER — Universal LLM Provider Router
+
+OMNIROUTER provides a single unified interface to every LLM provider. It handles authentication, rate limiting, failover, cost tracking, and context compression. COGLOAD (SYS-10) determines which tier of model to use; OMNIROUTER executes the call to that model.
+
+3.6.1 Supported Providers (minimum — must all be implemented)
+Anthropic (Claude Sonnet, Claude Haiku, Claude Opus)
+OpenAI (GPT-4o, GPT-4o-mini, o3, o4-mini)
+Google (Gemini 2.5 Pro, Gemini Flash)
+Groq (Llama 3.3 70B, Mixtral 8x7B) — for ultra-low latency
+Mistral AI (Mistral Large, Mistral Nemo)
+Ollama (any locally installed model) — for offline-only operation
+LM Studio (OpenAI-compatible endpoint)
+Any OpenAI-compatible API endpoint (user-configurable base URL)
+
+3.6.2 Token Optimizer
+Before every LLM call, the Token Optimizer compresses the context using the following pipeline. This pipeline is mandatory and must not be bypassed:
+Remove all duplicate content. If the same code block appears more than once in the context, keep only one copy and add a reference note.
+Summarize conversation history older than 10 turns into a compact summary paragraph. The summary must preserve all decisions and key facts. The full conversation is stored in MEMORY-GRAPH.
+Replace large code blocks not directly relevant to the current query with a semantic summary and a MEMORY-GRAPH retrieval key.
+Compute token count. If still exceeds model context limit, apply semantic chunking: rank all context segments by relevance to current query (using ChromaDB cosine similarity), remove lowest-ranked segments until within limit.
+Never remove: the current task description, the most recent error message, the ResourceBudget, or the current file being edited.
+
+RULE: Token optimization must never reduce response quality. If the optimizer cannot compress below the context limit without removing critical information, it must split the task into sub-tasks and process them sequentially, merging results at the end.
+
+3.7 SYS-07: SENTINEL — Security and Dependency Guardian
+
+SENTINEL is NEXUS&apos;s zero-trust security layer. It operates on the assumption that all external inputs — dependencies, API responses, web-fetched content, and even generated code — are potentially malicious until proven safe.
+
+3.7.1 Dependency Scanning Pipeline (mandatory for every dependency install)
+Check dependency name against known malware database (local copy, updated on first run from PyPI advisory DB and npm audit DB).
+Check exact version against CVE database (NIST NVD, local cached copy).
+Download package to isolated temp directory. DO NOT install yet.
+Extract package contents. Run Bandit (Python) or NodeJSScan (JS) on extracted source code.
+Run custom AST analysis checks (see 3.7.2).
+Check package metadata: verify publisher identity matches historical publisher (typosquatting detection).
+If all checks pass: set scan_status = &apos;CLEAN&apos; in dependencies table, proceed with install.
+If any check fails: set scan_status = &apos;QUARANTINED&apos;, log full report, notify user, DO NOT install. FORGE must find an alternative.
+
+3.7.2 Custom AST Security Checks (all must run)
+Network socket creation without explicit user permission in ResourceBudget.
+File system access outside the designated workspace directory.
+subprocess.call(), os.system(), or eval() on any non-literal argument.
+Encoded/obfuscated strings (base64 or hex-encoded executable content).
+Hardcoded credentials, API keys, or passwords (regex patterns for common formats).
+Cryptominer patterns (specific hash computation loops with coin mining signatures).
+Reverse shell patterns (socket connection to external IP + subprocess pipe).
+
+3.8 SYS-08: PHANTOM — Shadow Mode Background Monitor
+
+PHANTOM is the only subsystem that the user never explicitly invokes. It runs as a background daemon from the moment NEXUS starts and continuously observes the user&apos;s codebase, filing its own tasks to FORGE when it detects improvements, risks, or patterns that need attention.
+
+3.8.1 What PHANTOM Watches
+File system events: any file modification in the project directory (using watchdog library).
+Duplicate code patterns: any function with DNA hash similarity > 0.75 to an existing function.
+Growing complexity: any function whose cyclomatic complexity increases above 10.
+Stale dependencies: any installed package with a newer version available.
+Dead code: any function with zero calls in the codebase for > 7 days.
+Test coverage gaps: any new function with no corresponding test function.
+
+3.8.2 PHANTOM Reporting Rules
+PHANTOM never blocks the user&apos;s work. It observes silently and queues findings for the daily health report. It may only interrupt the user immediately for CRITICAL severity findings (see SYS-12 severity definitions). All other findings accumulate until explicitly requested or until the daily report time (midnight local time).
+RULE: PHANTOM must never auto-apply changes. It identifies and reports. The user must approve before FORGE acts on any PHANTOM finding.
+
+3.9 SYS-09: EVOLVER — Biological Mutation Engine
+
+EVOLVER implements the Biological Development Model. It treats code optimization as an evolutionary process: generate variation, measure fitness, select survivors, mutate, repeat.
+
+3.9.1 Evolution Protocol (exact sequence)
+RECEIVE a function or code block to optimize from FORGE or direct user request.
+GENERATE 10 variations of the function. Each variation must use a meaningfully different algorithmic approach: (a) Original, (b) Iterative rewrite, (c) Recursive rewrite, (d) Vectorized/SIMD-optimized, (e) Memory-pool optimized, (f) Cache-line-aware layout, (g) Parallel/multi-threaded, (h) Functional style (pure functions, no mutation), (i) Lazy evaluation, (j) Lookup-table precomputation.
+SUBMIT all 10 variations to ADVERSARY for correctness verification. Only variations that pass all functional tests proceed.
+BENCHMARK all surviving variations: measure wall-clock time, CPU cycles, peak RAM usage, and cache misses (using Python timeit + tracemalloc + perf_counter).
+SCORE each variation: Fitness = (1/time_ms) * 0.4 + (1/ram_bytes) * 0.4 + (1/complexity) * 0.2
+SELECT top 3 by fitness score.
+MUTATE each of the top 3 by applying one random micro-optimization from the mutation library (see 3.9.2).
+REPEAT steps 3-7 for 5 generations OR until fitness improvement between generations is < 2%. Stop whichever comes first.
+DELIVER the highest-fitness variant to the user with a full evolution report showing all generations, all scores, and the winning approach.
+
+3.9.2 Mutation Library (minimum mutations — all must be implemented)
+Loop unrolling: unroll inner loops by factor of 2, 4, or 8.
+Constant folding: precompute all expressions involving only literals.
+Dead code elimination: remove branches that are never reachable given known input types.
+Inlining: inline single-call helper functions.
+Type narrowing: replace generic type hints with specific ones to enable compiler optimization.
+Early return: add early return/continue for most common case to reduce branch prediction misses.
+String interning: replace repeated string literals with interned references.
+Generator conversion: convert list comprehensions to generator expressions where only iteration is needed.
+
+3.10 SYS-10: COGLOAD — Cognitive Load Balancer
+
+COGLOAD classifies every task by complexity and routes it to the appropriate model tier. This is the primary cost and speed optimization mechanism in NEXUS. A correctly configured COGLOAD reduces LLM API costs by 60-80% with zero quality degradation on appropriate tasks.
+
+3.10.1 Task Classification Rules (must be applied in this exact order)
+
+Tier
+Classification Criteria
+Model Examples
+Approx. Cost
+SIMPLE
+Single function, < 50 tokens output, no reasoning chain needed
+Phi-3 Mini, Gemini Flash, Llama 3.2 1B (local)
+~$0.0001 per call
+MEDIUM
+Multi-function, needs context of 1-3 files, moderate reasoning
+Mistral 7B, Gemini 2.5 Flash, Claude Haiku
+~$0.001 per call
+COMPLEX
+Multi-file, requires architecture decisions, security implications, or debate protocol
+Claude Sonnet/Opus, GPT-4o, Llama 3.3 70B, Gemini 2.5 Pro
+~$0.01-0.05 per call
+
+3.10.2 Automatic Tier Escalation
+COGLOAD must monitor response quality and escalate tier automatically if:
+The model&apos;s output contains placeholder code (# TODO, pass, raise NotImplementedError).
+The model&apos;s output fails ADVERSARY&apos;s correctness tests.
+The model&apos;s output is incomplete (response was cut off due to token limit).
+The task has already been retried twice at the current tier.
+Escalation is permanent for that task — once escalated to COMPLEX, it cannot be de-escalated.
+
+3.11 SYS-11: TIMETRAVEL — Root-Cause Debug Engine
+
+TIMETRAVEL is invoked whenever a bug is detected — either by ADVERSARY, by user report, or by PHANTOM. Its purpose is not just to fix the bug, but to reconstruct exactly how and when the bug was introduced, and to leave a permanent record that prevents its recurrence.
+
+3.11.1 TIMETRAVEL Protocol (exact sequence)
+RECEIVE bug report: must include at minimum (a) error message, (b) stack trace, (c) file path and line number.
+RETRIEVE file history from MEMORY-GRAPH: load all recorded states of the affected file, ordered by timestamp.
+RETRIEVE git log for the affected file using subprocess (git log --follow -p <filepath>). If git is not available, use MEMORY-GRAPH snapshots only.
+BINARY SEARCH through history: test each historical version of the function against the failing test case. Find the exact commit/snapshot where the bug first appeared.
+ANALYZE the diff between the last-working version and the first-broken version. Produce a plain-English explanation of the root cause in one paragraph.
+GENERATE fix: apply the minimal code change that restores correct behavior without reverting to the old implementation.
+GENERATE regression test: write a specific test case using the exact input that triggered the bug. This test must be added to the test suite permanently.
+GENERATE timeline report: a structured document showing (a) when the bug was introduced, (b) what change introduced it, (c) why it wasn&apos;t caught, (d) the fix, (e) the new test.
+STORE all findings in MEMORY-GRAPH bugs table.
+DELIVER timeline report to user.
+
+3.12 SYS-12: IMMUNE — Architecture Health Monitor
+
+IMMUNE is the long-running architecture guardian. It continuously evaluates the health of the entire codebase, detects architectural decay, and predicts where bugs are likely to appear next based on historical change patterns.
+
+3.12.1 Health Metrics Computed Daily
+Coupling score: average number of imports per file (high = fragile architecture).
+Cohesion score: ratio of functions that use the same data structures within a module.
+Change frequency index: which files are modified most often (high churn = high risk).
+Bug density: bugs per 100 lines of code per file over last 30 days.
+Test coverage percentage per module.
+Dependency freshness: percentage of dependencies within 2 major versions of latest.
+Complexity trend: average cyclomatic complexity per module, tracked over time.
+
+3.12.2 Infection Detection (Architectural Code Smells)
+IMMUNE monitors for the following infection patterns. Each pattern has a defined quarantine action:
+
+Pattern Name
+Detection Criterion
+Quarantine Action
+God Object
+Single class > 500 lines with > 20 methods
+Flag for decomposition, block new methods
+Circular Dependency
+Module A imports B, B imports A (or longer chain)
+Block merges, require immediate refactor
+Shotgun Surgery
+5+ files changed in every recent task touching one feature
+Suggest consolidation to single module
+Feature Envy
+Function calls methods of another class more than its own
+Suggest moving function to that class
+Dead Weight
+Module with 0 imports anywhere in codebase for > 14 days
+Suggest deletion, quarantine from further dev
+Dependency Chain
+Import depth > 5 levels for any module
+Require architectural review before new imports
+
+3.12.3 Predictive Bug Scoring
+IMMUNE assigns a Predicted Bug Score (PBS) to every module using the following formula. This score is included in the daily health report:
+# immune.py
+def predicted_bug_score(module) -> float:
+    &quot;&quot;&quot;Returns float 0.0 (safe) to 1.0 (very likely to produce bugs)&quot;&quot;&quot;
+    churn_weight      = 0.30  # normalized change frequency last 30 days
+    complexity_weight = 0.25  # normalized avg cyclomatic complexity
+    coupling_weight   = 0.20  # normalized import count
+    coverage_weight   = 0.15  # (1 - test_coverage_pct)
+    history_weight    = 0.10  # bug_count_last_90_days / total_lines * 100
+    return (
+        module.churn_norm    * churn_weight +
+        module.complexity_norm * complexity_weight +
+        module.coupling_norm * coupling_weight +
+        (1 - module.coverage) * coverage_weight +
+        module.history_norm  * history_weight
+    )
+
+4. CREATION CAPABILITIES
+
+NEXUS is not only a code assistant. It is a full engineering intelligence capable of originating new languages, frameworks, OS configurations, AI architectures, and libraries. This section specifies what NEXUS can create and the exact process for each category.
+
+4.1 New Programming Language (AXON)
+AXON is NEXUS&apos;s built-in AI-native programming language project. NEXUS can design, implement, and bootstrap a complete programming language using the following pipeline:
+Design Phase: NEXUS generates the language specification as a structured document covering: grammar (BNF/EBNF notation), type system, memory model, standard library API, and target compilation backends.
+Lexer Implementation: NEXUS generates a complete lexer in Python using PLY or ANTLR. The lexer must handle all tokens defined in the grammar with no ambiguity.
+Parser Implementation: NEXUS generates a recursive-descent parser or LALR(1) parser producing a typed AST.
+Semantic Analyzer: Type checking, scope resolution, and constant folding.
+Code Generator: Transpiles AST to Python, C, or LLVM IR (user choice).
+Standard Library: Minimum 20 built-in functions covering I/O, math, string manipulation, and collection operations.
+REPL: Interactive read-eval-print loop for immediate experimentation.
+Documentation: Auto-generated language reference manual.
+AXON design principles: native tensor operations as first-class syntax, automatic memory layout for neural network weight matrices, built-in gradient tracking, compiles to CUDA and CPU simultaneously.
+
+4.2 Custom OS Configuration
+NEXUS can design and generate a custom minimal Linux distribution optimized for AI workloads on resource-constrained hardware (target: 8 GB RAM laptops). The output is a complete build script and configuration set, not a pre-built image.
+Base: Linux kernel 6.x with PREEMPT_RT real-time patches applied.
+Init system: runit or s6 (not systemd — 10x lower memory overhead).
+Memory: zRAM compression configured at 50% of physical RAM, lz4 algorithm.
+CPU scheduler: custom cgroup configuration pinning NEXUS agent to dedicated cores.
+Memory allocator: mimalloc replacing glibc malloc system-wide.
+Filesystem: ext4 with noatime mount option and commit=60 for reduced I/O.
+Display: minimal Wayland compositor (labwc) or headless for server use.
+Total base OS RAM footprint target: under 180 MB.
+
+4.3 AI Model Design and Fine-Tuning
+NEXUS can manage the complete lifecycle of AI model development using open-source base models:
+Architecture Modification: NEXUS can modify attention mechanisms, add or remove layers, change activation functions, and implement custom positional encodings in PyTorch. Supported base models: Mistral 7B, LLaMA 3.x, Qwen 2.5, Phi-3.
+Training Data Pipeline: Collects, deduplicates, filters, and formats training data. Supports JSONL, Parquet, and HuggingFace datasets format.
+Fine-tuning: Implements QLoRA (4-bit quantized LoRA) for training on consumer hardware. Minimum hardware: 8 GB VRAM GPU or CPU-only fallback.
+Evaluation: Automated evaluation harness measuring perplexity, MMLU score, HumanEval pass@k, and custom task-specific benchmarks.
+Quantization: Post-training quantization to GGUF format (for llama.cpp) or GPTQ (for GPU inference).
+Deployment: Integration with Ollama for local serving via NEXUS&apos;s OMNIROUTER.
+
+5. FOUR NEW INTELLIGENCE MODULES
+
+These four modules extend NEXUS beyond any existing agent system. They must be implemented as first-class subsystems with the same precision and completeness as the core twelve.
+
+5.1 MODULE-A: Biological Development Model (EVOLVER)
+Already fully specified in Section 3.9. Summary for reference:
+Generates 10 algorithmically distinct variations of any function.
+Runs all variations through ADVERSARY correctness verification.
+Benchmarks survivors on time, RAM, and CPU cycles.
+Scores by fitness function weighting performance and simplicity.
+Mutates top 3 survivors and repeats for 5 generations.
+Delivers the evolutionary winner with a full generation-by-generation report.
+KEY POINT: EVOLVER is not random. Each of the 10 initial variations uses a named, deterministic algorithmic strategy. Mutation in later generations applies specific micro-optimizations from the mutation library. This is directed evolution, not random search.
+
+5.2 MODULE-B: Cognitive Load Balancer (COGLOAD)
+Already fully specified in Section 3.10. Summary for reference:
+Classifies every task as SIMPLE, MEDIUM, or COMPLEX before any LLM call.
+Routes to the cheapest model that can handle that complexity tier.
+Monitors output quality and auto-escalates if the model underperforms.
+Tracks cost per task and provides cumulative cost reporting.
+Expected cost reduction: 60-80% compared to routing all tasks to premium models.
+KEY POINT: Classification is based on four signals: estimated output token count, number of files requiring context, whether architectural decisions are required, and whether the task has security implications. All four signals must be evaluated before assigning a tier.
+
+5.3 MODULE-C: Time-Travel Debugging (TIMETRAVEL)
+Already fully specified in Section 3.11. Key additional implementation requirements:
+TIMETRAVEL must be triggered automatically whenever ADVERSARY finds a regression (a test that previously passed now fails).
+The binary search through history must use git bisect semantics: test midpoint of history, determine which half contains the regression, recurse.
+The root cause explanation must be written in plain English (no jargon), suitable for a non-expert reader.
+The regression test generated must be the exact minimal test case — not a copy of the full test suite. Minimum inputs, maximum specificity.
+Timeline report format: (1) What happened, (2) When it happened (timestamp and commit hash if available), (3) Why it happened (root cause), (4) What the fix is, (5) What test now prevents recurrence.
+KEY POINT: If git history is not available (not a git repository), TIMETRAVEL must use MEMORY-GRAPH snapshots exclusively. NEXUS stores a snapshot of every file it modifies. This means TIMETRAVEL works even in projects that do not use version control.
+
+5.4 MODULE-D: Architecture Immune System (IMMUNE)
+Already fully specified in Section 3.12. Key additional implementation requirements:
+The daily health report must be generated at midnight local time and stored as a markdown file in .nexus/health_reports/YYYY-MM-DD.md.
+The report must include: (a) Overall Health Score 0-100, (b) top 3 modules most at risk (by Predicted Bug Score), (c) list of all active infections with severity, (d) trend vs previous 7 days, (e) recommended actions with estimated implementation effort.
+Quarantine of a suspicious dependency means: (1) add it to .nexus/quarantine.json, (2) prevent FORGE from using it in any new code, (3) notify user with full reason. It does NOT uninstall — uninstall requires explicit user command.
+Change pattern analysis: IMMUNE must track which files are modified together across tasks. If files A, B, and C are always changed together, IMMUNE reports this as a coupling smell and suggests merging them or extracting a shared abstraction.
+
+6. COMPLETE PROJECT DIRECTORY STRUCTURE
+
+The following directory structure is mandatory. Every file listed must exist. No file may be omitted. The purpose of each file is defined to prevent any ambiguity during implementation.
+
+nexus/
+├── main.py                    # Entry point. Starts all subsystems, CLI
+├── config.py                  # Global config: API keys, model preferences, paths
+├── requirements.txt           # All Python dependencies (pinned versions)
+├── Dockerfile.sandbox         # Minimal sandbox image for FORGE execution
+│
+├── core/
+│   ├── message_bus.py         # MessageEnvelope dataclass + async queue manager
+│   ├── task.py                # Task dataclass + TaskClassification enum
+│   └── subsystem_base.py      # Abstract base class all subsystems inherit from
+│
+├── subsystems/
+│   ├── cortex.py              # SYS-01: Debate engine, Solver/Critic/Judge agents
+│   ├── memory_graph.py        # SYS-02: SQLite + ChromaDB knowledge graph
+│   ├── nerve.py               # SYS-03: Hardware telemetry + ResourceBudget
+│   ├── forge.py               # SYS-04: Code generation + Docker execution
+│   ├── adversary.py           # SYS-05: Automated QA attack suite
+│   ├── omnirouter.py          # SYS-06: Multi-provider LLM router
+│   ├── sentinel.py            # SYS-07: Security scanner + dependency guardian
+│   ├── phantom.py             # SYS-08: Background shadow monitor
+│   ├── evolver.py             # SYS-09: Biological mutation engine
+│   ├── cogload.py             # SYS-10: Cognitive load balancer
+│   ├── timetravel.py          # SYS-11: Root-cause debug engine
+│   └── immune.py              # SYS-12: Architecture health monitor
+│
+├── security/
+│   ├── ast_scanner.py         # Custom AST security check rules
+│   ├── cve_db.py              # Local CVE database manager
+│   ├── malware_patterns.py    # Known malware pattern registry
+│   └── typosquatting.py       # Publisher identity verification
+│
+├── cli/
+│   ├── interface.py           # Rich-based terminal UI
+│   ├── commands.py            # All CLI command handlers
+│   └── progress.py            # Task progress display
+│
+├── db/
+│   ├── schema.sql             # Complete SQLite schema (Section 3.2.2)
+│   └── migrations/            # Schema migration scripts
+│
+└── tests/
+    ├── test_cortex.py
+    ├── test_memory_graph.py
+    ├── test_nerve.py
+    ├── test_forge.py
+    ├── test_adversary.py
+    ├── test_omnirouter.py
+    ├── test_sentinel.py
+    ├── test_evolver.py
+    ├── test_cogload.py
+    ├── test_timetravel.py
+    └── test_immune.py
+
+7. PYTHON DEPENDENCIES (requirements.txt)
+
+All dependencies listed below are mandatory. Versions are minimum required. All must be installed during setup. SENTINEL will scan each before use.
+
+# requirements.txt — NEXUS Agent
+# Core async
+asyncio>=3.11
+aiohttp>=3.9.0
+
+# LLM routing
+litellm>=1.35.0           # universal LLM interface
+anthropic>=0.25.0
+openai>=1.23.0
+
+# Memory / vector store
+chromadb>=0.4.24
+sentence-transformers>=2.6.0
+
+# Hardware monitoring
+psutil>=5.9.8
+py3nvml>=0.2.7            # NVIDIA GPU monitoring
+
+# Code analysis
+astroid>=3.1.0            # AST analysis
+bandit>=1.7.8             # security scanning
+radon>=6.0.1              # cyclomatic complexity
+
+# File watching (PHANTOM)
+watchdog>=4.0.0
+
+# Docker (FORGE sandbox)
+docker>=7.0.0
+
+# CLI
+rich>=13.7.0
+typer>=0.12.0
+
+# Testing (ADVERSARY)
+pytest>=8.1.0
+pytest-cov>=5.0.0
+hypothesis>=6.100.0       # fuzzing
+locust>=2.24.0            # load testing
+
+# Git integration
+gitpython>=3.1.43
+
+# Data
+sqlite3                   # stdlib, no install needed
+pydantic>=2.7.0
+python-dotenv>=1.0.1
+
+8. MEMORY FOOTPRINT SPECIFICATION
+
+NEXUS is designed to run its agent core within 2 GB of RAM, leaving at least 2 GB free on a 4 GB system and 6 GB free on an 8 GB system for the user&apos;s LLM (if running locally via Ollama) and other applications.
+
+Component
+Idle RAM
+Peak RAM
+Hard Limit
+CORTEX (debate agents)
+120 MB
+480 MB
+600 MB
+MEMORY-GRAPH (ChromaDB + SQLite)
+200 MB
+600 MB
+700 MB
+NERVE (hardware monitor)
+30 MB
+80 MB
+100 MB
+FORGE (build engine)
+80 MB
+200 MB
+300 MB
+ADVERSARY + test runners
+60 MB
+400 MB
+500 MB
+SENTINEL (scanner)
+50 MB
+150 MB
+200 MB
+PHANTOM + IMMUNE (background)
+40 MB
+100 MB
+150 MB
+Docker sandbox (FORGE execution)
+150 MB
+500 MB
+2 GB (user code)
+TOTAL AGENT (excluding sandbox)
+~730 MB
+~2.0 GB
+2.5 GB hard cap
+
+IMPLEMENTATION RULE: If total agent memory (excluding sandbox) exceeds 2.5 GB at any time, NERVE must immediately suspend lowest-priority background subsystems (PHANTOM, then IMMUNE) until memory is below 2 GB. This prevents NEXUS from starving the user&apos;s LLM or other applications.
+
+9. IMPLEMENTATION PHASES
+
+NEXUS must be built in the following phases, in exact order. Each phase must be fully complete and all tests passing before the next phase begins. No phase may be skipped or merged with another.
+
+Phase
+Duration
+Deliverables
+Exit Criteria
+1
+Core Infrastructure
+message_bus.py, task.py, subsystem_base.py, config.py, main.py skeleton
+Message bus sends/receives 1000 messages/sec without dropping
+2
+OMNIROUTER + COGLOAD
+omnirouter.py, cogload.py, token optimizer, all provider integrations
+Successfully calls 3+ different providers, correctly classifies 20 test tasks
+3
+MEMORY-GRAPH
+memory_graph.py, full SQLite schema, ChromaDB integration, Code DNA
+Stores and retrieves 1000 entries, DNA hashes match across renames
+4
+NERVE + SENTINEL
+nerve.py, sentinel.py, security/, all AST checks, CVE DB setup
+Detects 10/10 planted malware samples, ResourceBudget attached to all tasks
+5
+FORGE + ADVERSARY
+forge.py, adversary.py, Dockerfile.sandbox, full attack suite
+Generates working Python script from natural language, passes all ADVERSARY checks
+6
+CORTEX
+cortex.py, debate protocol, all 5 agent types (3 Solvers, Critic, Judge)
+Debate session completes for 5 complex tasks, Judge scores are justified
+7
+PHANTOM + IMMUNE
+phantom.py, immune.py, daily health report, infection detection
+Health report generated for a real project with >= 3 findings
+8
+EVOLVER + TIMETRAVEL
+evolver.py, timetravel.py, mutation library, git bisect integration
+Evolution improves a function by >= 15%, TIMETRAVEL finds planted bug regression
+
+10. FINAL IMPLEMENTATION RULES FOR JULES / GEMINI
+
+MANDATORY: The following rules apply to the AI model implementing this specification. They exist because this document is being implemented by a model with limited reasoning capability. These rules prevent the most common failure modes.
+
+Rule 1: No placeholders.
+Every function in every file must be fully implemented. The strings &apos;TODO&apos;, &apos;FIXME&apos;, &apos;pass&apos;, &apos;raise NotImplementedError&apos;, and &apos;...&apos; are forbidden as function bodies. If a function is too complex to implement in one step, decompose it into smaller functions, all of which must also be fully implemented.
+
+Rule 2: No silent skipping.
+If this document specifies that a subsystem has a certain number of features, all features must be implemented. For example: ADVERSARY specifies 5 attack modules. All 5 must be present and functional. Implementing 3 and leaving 2 as stubs is a failure.
+
+Rule 3: Follow the sequence.
+Whenever this document specifies a numbered sequence of steps (FORGE&apos;s 12-step pipeline, TIMETRAVEL&apos;s 10-step protocol, etc.), those steps must be executed in that exact order. No reordering. No merging of steps.
+
+Rule 4: Match the data structures exactly.
+All dataclasses, schemas, and data structures defined in this document must be implemented with the exact field names, types, and constraints specified. Do not rename fields. Do not add or remove fields without explicit justification.
+
+Rule 5: Test every subsystem.
+Every subsystem file (cortex.py, forge.py, etc.) must have a corresponding test file in the tests/ directory. Each test file must contain at minimum 5 test cases. All tests must pass before the phase is considered complete.
+
+Rule 6: Every security rule is a hard constraint.
+All rules marked with &apos;CRITICAL SECURITY RULE&apos; or &apos;CRITICAL IMPLEMENTATION RULE&apos; in this document are non-negotiable. They must be implemented exactly as stated. No exceptions based on convenience, performance, or simplicity.
+
+Rule 7: Memory limits are enforced, not advisory.
+The memory limits in Section 8 are hard limits. If a subsystem&apos;s implementation exceeds its hard limit, the implementation must be revised to use less memory. Exceeding memory limits is a defect, not a warning.
+
+Rule 8: When in doubt, report — never assume.
+If any situation arises during implementation that is not covered by this specification, NEXUS must report it to the user and ask for clarification. NEXUS must never silently assume a behavior or fill a gap with an arbitrary choice.
+
+END OF NEXUS DESIGN DOCUMENT — VERSION 1.0
+This document is complete. All sections are mandatory. No section may be omitted.

@@ -2,7 +2,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 
 @dataclass
 class MessageEnvelope:
@@ -32,7 +32,7 @@ class MessageBus:
         elif envelope.receiver_id in self.inboxes:
             await self.inboxes[envelope.receiver_id].put(envelope)
         else:
-            # Skip unknown receiver without using pass
+            # Notify error for unknown receiver
             self.inboxes.get("LOG", asyncio.Queue()).put_nowait(f"Unknown receiver: {envelope.receiver_id}")
 
     async def receive(self, subsystem_id: str, timeout: float = 30.0) -> Optional[MessageEnvelope]:
